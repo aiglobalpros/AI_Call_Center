@@ -3,9 +3,11 @@ import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
 import datetime as dt
+import xgboost as xgb
 
 from dateutil.relativedelta import relativedelta
 from scipy import stats
+
 
 def plot_train_val_test(X, y, idx_train, idx_val, idx_test, idx_out):
     x_train = X.loc[idx_train].values
@@ -94,6 +96,7 @@ def count_mep(x, level):
         Conditional aggregation function
     """
     return (x==level).sum()
+
 
 def build_mep_features(dataset_path):
     mep_df = pd.read_csv(dataset_path + 'MEP_Videotron.csv', encoding="ISO-8859-1", low_memory=False)
@@ -339,7 +342,6 @@ def plot_predictions_vs_observations(x, y_obs, y_pred, test_start_dt, test_end_d
 
     ax.set_ylabel('Number of tickets received')
 
-
     subtitle = 'Test dates: from {0:s} to {1:s}'.format(test_start_dt.strftime('%Y-%m-%d'), test_end_dt.strftime('%Y-%m-%d'))
     ax.set_title('Observation vs prediction of the number of CCT tickets received\n' + subtitle)
 
@@ -351,6 +353,9 @@ def plot_predictions_vs_observations(x, y_obs, y_pred, test_start_dt, test_end_d
 def plot_pearson_corr(df, list_, plot=True, label='Ticket cnt', threshold=0, alpha=1):
     corr_df = pd.DataFrame([], columns=['feature', 'pearson_r', 'abs_pearson_r', 'p-value'])
     
+    # Rolling window on 1 week
+    window_size = 7
+            
     for col in list_:
         condition = ((~df[label].isna()) & (~df[col].isna()))
 
@@ -358,17 +363,19 @@ def plot_pearson_corr(df, list_, plot=True, label='Ticket cnt', threshold=0, alp
         
         if (plot is True) & (abs(pearson_r)>threshold) & (p_val < alpha):
             # Compute rolling window synchrony
-            f, ax = plt.subplots(figsize=(8,2.5))
-
-            df.loc[condition, [col, label]].rolling(window=30,center=True).median().plot(ax=ax)
-            ax.set(xlabel='Days', ylabel='Pearson r')
-            ax.set(title=f"Overall Pearson r = {np.round(pearson_r, 4)}\np-value: {np.round(p_val, 4)}")
+            f, ax = plt.subplots(figsize=(12, 3))
+            
+            df.loc[condition, [col, label]].rolling(window=window_size, center=True).median().plot(ax=ax)
+            ax.set(xlabel='Days', ylabel=f'Median value rolling window of {window_size} days')
+            ax.set(title='Overall Pearson r = {0:.4f}\np-value: {1:.2e}'.format(pearson_r, p_val))
+            
             
             plt.show()
         
         corr_df = corr_df.append({'feature':col, 'pearson_r':pearson_r, 'abs_pearson_r':abs(pearson_r), 'p-value': p_val}, ignore_index=True)
-        
-    return corr_df
+    
+    # Return the correlation results sorted by pearson score
+    return corr_df.sort_values(by='abs_pearson_r', ascending=True)
 
 
 def plot_weather_feature(df):
@@ -394,3 +401,26 @@ def plot_weather_feature(df):
             plt.title(col)
 
             plt.show()
+            
+            
+def apply_feature_selection(X_train, feature_selection=True, xgb_imp_threshold=0, person_r_threshold=0.3):
+    if feature_selection is True:
+        # Use the XGBoost feature importance to keep the most important features
+        xgb_rg.fit(X_train, y_train)
+        xgb_imp_features_loc = (xgb_rg.feature_importances_ > xgb_imp_threshold)
+        xgb_imp_features     = X_train.loc[:, xgb_imp_features_loc].columns.values
+
+        # Get feature correlation. Keep only features above a fixed threshold
+        corr_df           = plot_pearson_corr(X_train, X_train.columns.values, plot=False)
+        corr_tgt_features = list(corr_df.loc[corr_df['abs_pearson_r'] > person_r_threshold]['feature'].values)
+
+        # Set a list of features to keep based on both XGBoost feature importance and correlation coefficient with target
+        keep_vars = list(set(corr_tgt_features) & set(xgb_imp_features))
+
+        f_list = X_train.loc[:, keep_vars].columns.values
+        print('Feature selection done. Training the model on %d features' % (len(f_list)))
+    else:
+        f_list = X_train.columns.values
+        print('No feature selection. Training the model on %d features' % (len(f_list)))
+        
+    return f_list
