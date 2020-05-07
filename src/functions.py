@@ -8,6 +8,8 @@ import xgboost as xgb
 from dateutil.relativedelta import relativedelta
 from scipy import stats
 
+lag_list = [7, 8, 9, 10, 11, 12, 13, 14, 21, 28]
+
 
 def plot_train_val_test(X, y, idx_train, idx_val, idx_test, idx_out):
     x_train = X.loc[idx_train].values
@@ -209,39 +211,24 @@ def build_event_related_features(df):
 
 
 def build_lag_features(df, col):
-    df[col + ' lag_1']  = df[col].shift(1)  # use the number of tickets 1 day prior the current date
-    df[col + ' lag_2']  = df[col].shift(2)  # use the number of tickets 2 days prior the current date
-    df[col + ' lag_3']  = df[col].shift(3)  # use the number of tickets 3 days prior the current date
-    df[col + ' lag_4']  = df[col].shift(4)  # use the number of tickets 4 days prior the current date
-    df[col + ' lag_5']  = df[col].shift(5)  # use the number of tickets 5 days prior the current date
-    df[col + ' lag_6']  = df[col].shift(6)  # use the number of tickets 6 days prior the current date
-    df[col + ' lag_7']  = df[col].shift(7)  # use the number of tickets 7 days prior the current date
-    df[col + ' lag_14'] = df[col].shift(14) # use the number of tickets 14 days prior the current date
-    df[col + ' lag_21'] = df[col].shift(21) # use the number of tickets 21 days prior the current date
-    df[col + ' lag_28'] = df[col].shift(28) # use the number of tickets 28 days prior the current date 
-    
+    """
+        We use a lag of one week in order to be able to do a prediction one week in advance
+    """    
+    for lag in lag_list:
+        df[col + f' lag_{lag}']  = df[col].shift(lag)  # use the number of tickets X days prior the current date    
     
     return df
 
 
 def build_perfo_features(dataset_path):
-    perfo_df = pd.read_csv(dataset_path + 'performance_centre_appels_sept2017_mars2020.csv', encoding="ISO-8859-1", low_memory=False)
-    perfo_lag_df = pd.DataFrame(pd.to_datetime(perfo_df['Date']), columns=['Date'])
-    feature_list = perfo_df.drop(columns=['Jour','Date']).columns.values
+    df = pd.read_csv(dataset_path + 'performance_centre_appels_sept2017_mars2020.csv', encoding="ISO-8859-1", low_memory=False)
+    df = pd.DataFrame(pd.to_datetime(df['Date']), columns=['Date'])
+    feature_list = df.drop(columns=['Jour','Date']).columns.values
     
     for col in feature_list:
-        perfo_lag_df[col + '_lag1'] = perfo_df[col].shift(1)
-        perfo_lag_df[col + '_lag2'] = perfo_df[col].shift(2)
-        perfo_lag_df[col + '_lag3'] = perfo_df[col].shift(3)
-        perfo_lag_df[col + '_lag4'] = perfo_df[col].shift(4)
-        perfo_lag_df[col + '_lag5'] = perfo_df[col].shift(5)
-        perfo_lag_df[col + '_lag6'] = perfo_df[col].shift(6)
-        perfo_lag_df[col + '_lag7'] = perfo_df[col].shift(7)
-        perfo_lag_df[col + '_lag14'] = perfo_df[col].shift(14)
-        perfo_lag_df[col + '_lag21'] = perfo_df[col].shift(21)
-        perfo_lag_df[col + '_lag28'] = perfo_df[col].shift(28)
-        
-    return perfo_lag_df
+        for lag in lag_list:
+            df[col + f'_lag{lag}']  = df[col].shift(lag)        
+    return df
 
 
 def build_weather_features(dataset_path, min_dt, max_dt, plot=True):
@@ -290,9 +277,9 @@ def compute_train_val_test_dates(train_start_dt, val_length, test_length, offset
     test_end_dt   = test_start_dt  + relativedelta(months=test_length)
     
     print('Fold %d:' % offset_months)
-    print('Train set: from %s to %s' % (train_start_dt, train_end_dt))
-    print('Validation set: from %s to %s' % (val_start_dt, val_end_dt))
-    print('Test set: from %s to %s\n' % (test_start_dt, test_end_dt))
+    print('\t* Train set:      from %s to %s'   % (train_start_dt.strftime('%Y-%m-%d'), train_end_dt.strftime('%Y-%m-%d')))
+    print('\t* Validation set: from %s to %s'   % (val_start_dt.strftime('%Y-%m-%d'),   val_end_dt.strftime('%Y-%m-%d')))
+    print('\t* Test set:       from %s to %s\n' % (test_start_dt.strftime('%Y-%m-%d'),  test_end_dt.strftime('%Y-%m-%d')))
 
     return train_end_dt, val_start_dt, val_end_dt, test_start_dt, test_end_dt
 
@@ -366,7 +353,7 @@ def plot_pearson_corr(df, list_, plot=True, label='Ticket cnt', threshold=0, alp
             f, ax = plt.subplots(figsize=(12, 3))
             
             df.loc[condition, [col, label]].rolling(window=window_size, center=True).median().plot(ax=ax)
-            ax.set(xlabel='Days', ylabel=f'Median value rolling window of {window_size} days')
+            ax.set(xlabel='Days', ylabel=f'Median value\nRolling window of {window_size} days')
             ax.set(title='Overall Pearson r = {0:.4f}\np-value: {1:.2e}'.format(pearson_r, p_val))
             
             
@@ -424,3 +411,20 @@ def apply_feature_selection(X_train, feature_selection=True, xgb_imp_threshold=0
         print('No feature selection. Training the model on %d features' % (len(f_list)))
         
     return f_list
+
+
+def plot_corr_features_target(corr_df):
+    remain_num = 50
+    width = 0.9
+
+    x = corr_df.tail(remain_num)['abs_pearson_r'].values
+    y = corr_df.tail(remain_num)['feature'].values
+
+    fig, ax = plt.subplots(figsize=(10, 18))
+    rects = ax.barh(y, x, color='r')
+    ax.set_yticks(y)
+    ax.set_yticklabels(y, rotation='horizontal')
+    ax.set_xlabel("absolute corr", fontsize = 14)
+    ax.set_title("Correlations between features and Ticket cnt", fontsize = 18)
+
+    plt.show()
